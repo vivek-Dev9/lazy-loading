@@ -1,70 +1,142 @@
-# Getting Started with Create React App
+# Infinite Scroll Table with React, TanStack Table & react-virtuoso
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+This project demonstrates an **infinite scrolling table** using **React, TanStack Table, and react-virtuoso**. It efficiently loads data in chunks and fetches new data **when 10 rows are left to scroll**.
 
-## Available Scripts
+---
 
-In the project directory, you can run:
+## 🛠️ Step-by-Step Setup
 
-### `npm start`
+### 1️⃣ Install Node.js (if not installed)
+Ensure you have **Node.js** installed. You can check by running:
+```sh
+node -v
+```
+If not installed, download and install it from [Node.js official site](https://nodejs.org/).
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+### 2️⃣ Create a New React App
+```sh
+npx create-react-app infinite-scroll-table
+cd infinite-scroll-table
+```
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+### 3️⃣ Install Dependencies
+```sh
+npm install @tanstack/react-table react-virtuoso axios
+```
 
-### `npm test`
+### 4️⃣ Create the Table Component
+Create a new file **`src/TableComponent.js`** and add the following code:
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+```jsx
+import React, { useEffect, useState, useCallback, useMemo } from "react";
+import { useReactTable, getCoreRowModel, flexRender } from "@tanstack/react-table";
+import { Virtuoso } from "react-virtuoso";
+import axios from "axios";
 
-### `npm run build`
+const allColumns = [
+  { accessorKey: "id", header: "ID" },
+  { accessorKey: "title", header: "Title" },
+  { accessorKey: "body", header: "Body" },
+];
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+const TableComponent = () => {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+  const fetchData = useCallback(async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const response = await axios.get(
+        `https://jsonplaceholder.typicode.com/posts?_start=${(page - 1) * 30}&_limit=30`
+      );
+      setData((prevData) => [...prevData, ...response.data]);
+      setPage((prevPage) => prevPage + 1);
+    } catch (error) {
+      console.error("Error fetching data:", error);
+    } finally {
+      setLoading(false);
+    }
+  }, [loading, page]);
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+  useEffect(() => {
+    fetchData();
+  }, []);
 
-### `npm run eject`
+  const table = useReactTable({
+    data,
+    columns: allColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+  return (
+    <div style={{ padding: "20px", maxWidth: "800px", margin: "auto" }}>
+      <div style={{ height: "500px", border: "1px solid #ddd", padding: "10px" }}>
+        <Virtuoso
+          style={{ height: "100%" }}
+          data={table.getRowModel().rows}
+          rangeChanged={(range) => {
+            const remainingRows = table.getRowModel().rows.length - range.endIndex;
+            if (!loading && remainingRows <= 10) {
+              fetchData();
+            }
+          }}
+          overscan={10}
+          itemContent={(index, row) => (
+            <div key={row.id} style={{ display: "flex", padding: "10px", borderBottom: "1px solid #ddd" }}>
+              {row.getVisibleCells().map((cell) => (
+                <div key={cell.id} style={{ flex: 1 }}>
+                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                </div>
+              ))}
+            </div>
+          )}
+        />
+        {loading && <p style={{ textAlign: "center" }}>Loading more data...</p>}
+      </div>
+    </div>
+  );
+};
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+export default TableComponent;
+```
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+### 5️⃣ Modify `App.js`
+Open **`src/App.js`** and replace its contents with:
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+```jsx
+import React from "react";
+import TableComponent from "./TableComponent";
 
-## Learn More
+function App() {
+  return (
+    <div>
+      <h2 style={{ textAlign: "center" }}>Infinite Scroll Table</h2>
+      <TableComponent />
+    </div>
+  );
+}
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+export default App;
+```
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+### 6️⃣ Run the Project
+```sh
+npm start
+```
+Your application will be available at **http://localhost:3000/** 🚀
 
-### Code Splitting
+---
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+## 📜 License  
+This project is **MIT Licensed**.  
 
-### Analyzing the Bundle Size
+## 🤝 Contributing  
+Feel free to submit issues and pull requests.  
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+## 🌟 Show Your Support  
+If you find this project helpful, please **⭐ Star** the repo!  
 
-### Making a Progressive Web App
+Happy Coding! 🚀
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
