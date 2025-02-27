@@ -1,61 +1,99 @@
 import React, { useState, useEffect, useRef } from "react";
 import { AutoSizer, List } from "react-virtualized";
-import ColumnSelector from "./ColumnSelector";
 
-const API_URL = "https://jsonplaceholder.typicode.com/posts";
+const COLUMN_COUNT = 50;
+const COLUMN_WIDTH = 200;
+const DB_NAME = "LargeTableDB";
+const STORE_NAME = "rows";
+let db;
 
-const COLUMNS = [
-  { header: "ID", accessorKey: "id" },
-  { header: "Title", accessorKey: "title" },
-  { header: "Body", accessorKey: "body" },
-  { header: "User ID", accessorKey: "userId" },
-];
+const openDB = () => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+    request.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+};
+
+const saveToDB = async (rows) => {
+  if (!db) db = await openDB();
+  return new Promise((resolve) => {
+    const transaction = db.transaction(STORE_NAME, "readwrite");
+    const store = transaction.objectStore(STORE_NAME);
+    rows.forEach((row) => store.put(row));
+    transaction.oncomplete = () => resolve();
+  });
+};
+
+const fetchFromDB = async (start, limit) => {
+  if (!db) db = await openDB();
+  return new Promise((resolve) => {
+    const transaction = db.transaction(STORE_NAME, "readonly");
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.openCursor();
+    let results = [];
+    let index = 0;
+
+    request.onsuccess = (event) => {
+      const cursor = event.target.result;
+      if (cursor && index < start + limit) {
+        if (index >= start) results.push(cursor.value);
+        index++;
+        cursor.continue();
+      } else {
+        resolve(results);
+      }
+    };
+  });
+};
+
+const generateBatchData = (start, count) => {
+  return Array.from({ length: count }, (_, i) => {
+    const row = { id: start + i + 1 };
+    for (let j = 1; j <= COLUMN_COUNT; j++) {
+      row[`col${j}`] = `Row ${start + i + 1} - Col ${j}`;
+    }
+    return row;
+  });
+};
 
 const TableComponent = () => {
   const [data, setData] = useState([]);
-  const [selectedColumns, setSelectedColumns] = useState(
-    COLUMNS.map((col) => col.accessorKey)
-  );
-  const [loading, setLoading] = useState(false);
-  const workerRef = useRef(null);
-  const listRef = useRef(null);
+  const [recordCount, setRecordCount] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const scrollContainerRef = useRef(null);
+  const headerRef = useRef(null);
 
   useEffect(() => {
-    workerRef.current = new Worker(new URL("./worker.js", import.meta.url));
-
-    workerRef.current.onmessage = (event) => {
-      const { action, data } = event.data;
-      if (action === "processedData") {
-        setData((prev) => [...prev, ...data]);
-        setLoading(false);
-      }
-    };
-
-    // Fetch first 30 rows
-    fetchData(30);
-
-    return () => workerRef.current.terminate();
+    indexedDB.deleteDatabase(DB_NAME);
+    openDB().then(() => {
+      const initialData = generateBatchData(0, 1000);
+      saveToDB(initialData).then(() => {
+        console.log("Initial data saved to IndexedDB");
+        setRecordCount(1000);
+        loadData(0, 1000);
+      });
+    });
   }, []);
 
-  const fetchData = (count) => {
-    if (loading) return;
-    setLoading(true);
-
-    fetch(API_URL)
-      .then((response) => response.json())
-      .then((data) => {
-        workerRef.current.postMessage({
-          action: "processData",
-          data: data.slice(0, count),
-        });
-      })
-      .catch((error) => console.error("API Fetch Error:", error));
+  const loadData = async (start, count) => {
+    const rows = await fetchFromDB(start, count);
+    setData((prev) => [...prev, ...rows]);
+    if (rows.length < count) setHasMore(false);
   };
 
-  const onScroll = ({ stopIndex }) => {
-    if (stopIndex >= data.length - 5 && !loading) {
-      fetchData(10);
-    }
+  const addMoreData = async () => {
+    const newBatch = generateBatchData(recordCount, 100000);
+    await saveToDB(newBatch);
+    const newRecordCount = recordCount + 100000;
+    setRecordCount(newRecordCount);
+    loadData(recordCount, 100000);
   };
 
   const rowRenderer = ({ index, key, style }) => {
@@ -74,35 +112,49 @@ const TableComponent = () => {
           ...style,
           display: "flex",
           borderBottom: "1px solid #ddd",
-          minWidth: "100%",
+          minWidth: `${COLUMN_COUNT * COLUMN_WIDTH}px`,
         }}
       >
-        {selectedColumns.map((col, i) => (
+        {Object.values(row).map((value, i) => (
           <div
             key={i}
             style={{
-              width: 200,
+              width: COLUMN_WIDTH,
               padding: "5px",
               overflow: "hidden",
               whiteSpace: "nowrap",
             }}
           >
-            {row[col]}
+            {value}
           </div>
         ))}
       </div>
     );
   };
 
+  // Sync horizontal scrolling between header and table body
+  const syncScroll = () => {
+    if (scrollContainerRef.current && headerRef.current) {
+      headerRef.current.scrollLeft = scrollContainerRef.current.scrollLeft;
+    }
+  };
+
   return (
     <div style={{ padding: "20px", width: "100vw", overflow: "hidden" }}>
-      <h3>Total Records: {data.length}</h3>
-      <ColumnSelector
-        columns={COLUMNS}
-        selectedColumns={selectedColumns}
-        setSelectedColumns={setSelectedColumns}
-      />
+      <h3>Total Records: {recordCount.toLocaleString()}</h3>
+      <button
+        onClick={addMoreData}
+        disabled={!hasMore}
+        style={{
+          marginBottom: "10px",
+          padding: "10px",
+          cursor: hasMore ? "pointer" : "not-allowed",
+        }}
+      >
+        {hasMore ? "Add 10,000 More Rows" : "No More Data"}
+      </button>
 
+      {/* Fixed Header with Synced Horizontal Scroll */}
       <div
         style={{
           height: "80vh",
@@ -111,41 +163,45 @@ const TableComponent = () => {
           overflow: "hidden",
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            background: "#007bff",
-            color: "#fff",
-            padding: "10px",
-            fontWeight: "bold",
-          }}
-        >
-          {selectedColumns.map((col, i) => (
-            <div key={i} style={{ width: 200, padding: "5px" }}>
-              {COLUMNS.find((c) => c.accessorKey === col)?.header}
-            </div>
-          ))}
+        <div ref={headerRef} style={{ width: "100%", overflowX: "auto" }}>
+          <div
+            style={{
+              display: "flex",
+              background: "#007bff",
+              color: "#fff",
+              padding: "10px",
+              fontWeight: "bold",
+              minWidth: `${COLUMN_COUNT * COLUMN_WIDTH}px`,
+            }}
+          >
+            {Array.from({ length: COLUMN_COUNT }).map((_, i) => (
+              <div key={i} style={{ width: COLUMN_WIDTH, padding: "5px" }}>
+                Column {i + 1}
+              </div>
+            ))}
+          </div>
         </div>
 
+        {/* Scrollable Table (Syncs with Header) */}
         <div
+          ref={scrollContainerRef}
           style={{
             height: "calc(80vh - 40px)",
             width: "100%",
             overflow: "auto",
           }}
+          onScroll={syncScroll}
         >
-          <div style={{ minWidth: "100%" }}>
+          <div style={{ minWidth: `${COLUMN_COUNT * COLUMN_WIDTH}px` }}>
             <AutoSizer disableHeight>
               {({ width }) => (
                 <List
-                  ref={listRef}
                   height={window.innerHeight * 0.8 - 40}
                   rowCount={data.length}
                   rowHeight={30}
                   width={width}
                   rowRenderer={rowRenderer}
-                  overscanRowCount={10}
-                  onRowsRendered={onScroll}
+                  overscanRowCount={50}
                 />
               )}
             </AutoSizer>
