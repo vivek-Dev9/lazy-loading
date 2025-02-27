@@ -1,106 +1,156 @@
-import React, { useEffect, useState, useCallback, useMemo } from "react";
-import {
-  useReactTable,
-  getCoreRowModel,
-  flexRender,
-} from "@tanstack/react-table";
-import { Virtuoso } from "react-virtuoso";
-import axios from "axios";
+import React, { useState, useEffect, useRef } from "react";
+import { AutoSizer, List } from "react-virtualized";
 import ColumnSelector from "./ColumnSelector";
 
-// Define all available columns
-const allColumns = [
-  { accessorKey: "id", header: "ID" },
-  { accessorKey: "title", header: "Title" },
-  { accessorKey: "body", header: "Body" },
+const API_URL = "https://jsonplaceholder.typicode.com/posts";
+
+const COLUMNS = [
+  { header: "ID", accessorKey: "id" },
+  { header: "Title", accessorKey: "title" },
+  { header: "Body", accessorKey: "body" },
+  { header: "User ID", accessorKey: "userId" },
 ];
 
 const TableComponent = () => {
   const [data, setData] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [page, setPage] = useState(1);
   const [selectedColumns, setSelectedColumns] = useState(
-    allColumns.map((col) => col.accessorKey)
+    COLUMNS.map((col) => col.accessorKey)
   );
+  const [loading, setLoading] = useState(false);
+  const workerRef = useRef(null);
+  const listRef = useRef(null);
 
-  // Fetch data with lazy loading
-  const fetchData = useCallback(async () => {
-    if (loading) return;
-    setLoading(true);
-    try {
-      const response = await axios.get(
-        `https://jsonplaceholder.typicode.com/posts?_start=${
-          (page - 1) * 30
-        }&_limit=30`
-      );
-      setData((prevData) => [...prevData, ...response.data]);
-      setPage((prevPage) => prevPage + 1);
-    } catch (error) {
-      console.error("Error fetching data:", error);
-    } finally {
-      setLoading(false);
-    }
-  }, [loading, page]);
-
-  // Load initial data
   useEffect(() => {
-    fetchData();
+    workerRef.current = new Worker(new URL("./worker.js", import.meta.url));
+
+    workerRef.current.onmessage = (event) => {
+      const { action, data } = event.data;
+      if (action === "processedData") {
+        setData((prev) => [...prev, ...data]);
+        setLoading(false);
+      }
+    };
+
+    // Fetch first 30 rows
+    fetchData(30);
+
+    return () => workerRef.current.terminate();
   }, []);
 
-  // Define the table instance
-  const visibleColumns = useMemo(
-    () => allColumns.filter((col) => selectedColumns.includes(col.accessorKey)),
-    [selectedColumns]
-  );
+  const fetchData = (count) => {
+    if (loading) return;
+    setLoading(true);
 
-  const table = useReactTable({
-    data,
-    columns: visibleColumns,
-    getCoreRowModel: getCoreRowModel(),
-  });
+    fetch(API_URL)
+      .then((response) => response.json())
+      .then((data) => {
+        workerRef.current.postMessage({
+          action: "processData",
+          data: data.slice(0, count),
+        });
+      })
+      .catch((error) => console.error("API Fetch Error:", error));
+  };
+
+  const onScroll = ({ stopIndex }) => {
+    if (stopIndex >= data.length - 5 && !loading) {
+      fetchData(10);
+    }
+  };
+
+  const rowRenderer = ({ index, key, style }) => {
+    const row = data[index];
+    if (!row)
+      return (
+        <div key={key} style={style}>
+          Loading...
+        </div>
+      );
+
+    return (
+      <div
+        key={key}
+        style={{
+          ...style,
+          display: "flex",
+          borderBottom: "1px solid #ddd",
+          minWidth: "100%",
+        }}
+      >
+        {selectedColumns.map((col, i) => (
+          <div
+            key={i}
+            style={{
+              width: 200,
+              padding: "5px",
+              overflow: "hidden",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {row[col]}
+          </div>
+        ))}
+      </div>
+    );
+  };
 
   return (
-    <div style={{ padding: "20px", maxWidth: "800px", margin: "auto" }}>
-      {/* Column Selector Component */}
+    <div style={{ padding: "20px", width: "100vw", overflow: "hidden" }}>
+      <h3>Total Records: {data.length}</h3>
       <ColumnSelector
-        columns={allColumns}
+        columns={COLUMNS}
         selectedColumns={selectedColumns}
         setSelectedColumns={setSelectedColumns}
       />
 
       <div
-        style={{ height: "500px", border: "1px solid #ddd", padding: "10px" }}
+        style={{
+          height: "80vh",
+          width: "100vw",
+          border: "1px solid #ddd",
+          overflow: "hidden",
+        }}
       >
-        <Virtuoso
-          style={{ height: "100%" }}
-          data={table.getRowModel().rows}
-          rangeChanged={(range) => {
-            const remainingRows =
-              table.getRowModel().rows.length - range.endIndex;
-            if (!loading && remainingRows <= 10) {
-              fetchData();
-            }
+        <div
+          style={{
+            display: "flex",
+            background: "#007bff",
+            color: "#fff",
+            padding: "10px",
+            fontWeight: "bold",
           }}
-          overscan={10}
-          itemContent={(index, row) => (
-            <div
-              key={row.id}
-              style={{
-                display: "flex",
-                padding: "10px",
-                borderBottom: "1px solid #ddd",
-              }}
-            >
-              {row.getVisibleCells().map((cell) => (
-                <div key={cell.id} style={{ flex: 1 }}>
-                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                </div>
-              ))}
+        >
+          {selectedColumns.map((col, i) => (
+            <div key={i} style={{ width: 200, padding: "5px" }}>
+              {COLUMNS.find((c) => c.accessorKey === col)?.header}
             </div>
-          )}
-        />
+          ))}
+        </div>
 
-        {loading && <p style={{ textAlign: "center" }}>Loading more data...</p>}
+        <div
+          style={{
+            height: "calc(80vh - 40px)",
+            width: "100%",
+            overflow: "auto",
+          }}
+        >
+          <div style={{ minWidth: "100%" }}>
+            <AutoSizer disableHeight>
+              {({ width }) => (
+                <List
+                  ref={listRef}
+                  height={window.innerHeight * 0.8 - 40}
+                  rowCount={data.length}
+                  rowHeight={30}
+                  width={width}
+                  rowRenderer={rowRenderer}
+                  overscanRowCount={10}
+                  onRowsRendered={onScroll}
+                />
+              )}
+            </AutoSizer>
+          </div>
+        </div>
       </div>
     </div>
   );

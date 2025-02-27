@@ -16,7 +16,9 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-scripts": "5.0.1",
+    "react-virtualized": "^9.22.6",
     "react-virtuoso": "^4.12.5",
+    "react-window": "^1.8.11",
     "web-vitals": "^2.1.4"
   },
   "scripts": {
