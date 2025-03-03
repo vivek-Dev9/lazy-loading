@@ -1,109 +1,124 @@
 import React, { useState, useEffect, useRef } from "react";
-import { AutoSizer, List } from "react-virtualized";
+import { AutoSizer, Grid } from "react-virtualized";
 
-const COLUMN_COUNT = 50;
-const COLUMN_WIDTH = 200;
-const DB_NAME = "LargeTableDB";
-const STORE_NAME = "rows";
-let db;
+// Define columns including Index column
+const allColumns = [
+  { accessorKey: "index", header: "#", width: 60, isIndex: true }, // Index column
+  { accessorKey: "id", header: "ID", width: 100 },
+  { accessorKey: "title", header: "Title", width: 300 },
+  { accessorKey: "body", header: "Body", width: 500 },
+];
 
-const openDB = () => {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
-    request.onupgradeneeded = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: "id" });
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-};
-
-const saveToDB = async (rows) => {
-  if (!db) db = await openDB();
-  return new Promise((resolve) => {
-    const transaction = db.transaction(STORE_NAME, "readwrite");
-    const store = transaction.objectStore(STORE_NAME);
-    rows.forEach((row) => store.put(row));
-    transaction.oncomplete = () => resolve();
-  });
-};
-
-const fetchFromDB = async (start, limit) => {
-  if (!db) db = await openDB();
-  return new Promise((resolve) => {
-    const transaction = db.transaction(STORE_NAME, "readonly");
-    const store = transaction.objectStore(STORE_NAME);
-    const request = store.openCursor();
-    let results = [];
-    let index = 0;
-
-    request.onsuccess = (event) => {
-      const cursor = event.target.result;
-      if (cursor && index < start + limit) {
-        if (index >= start) results.push(cursor.value);
-        index++;
-        cursor.continue();
-      } else {
-        resolve(results);
-      }
-    };
-  });
-};
-
-const generateBatchData = (start, count) => {
-  return Array.from({ length: count }, (_, i) => {
-    const row = { id: start + i + 1 };
-    for (let j = 1; j <= COLUMN_COUNT; j++) {
-      row[`col${j}`] = `Row ${start + i + 1} - Col ${j}`;
-    }
-    return row;
-  });
+const fetchData = async (start = 0, limit = 10) => {
+  const response = await fetch(
+    `https://jsonplaceholder.typicode.com/posts?_start=${start}&_limit=${limit}`
+  );
+  return response.json();
 };
 
 const TableComponent = () => {
   const [data, setData] = useState([]);
-  const [recordCount, setRecordCount] = useState(0);
-  const [hasMore, setHasMore] = useState(true);
-  const scrollContainerRef = useRef(null);
-  const headerRef = useRef(null);
+  const [sortColumn, setSortColumn] = useState(null);
+  const [sortDirection, setSortDirection] = useState("asc");
+  const [loading, setLoading] = useState(false);
+  const gridRef = useRef(null);
+  const totalRecords = 100; // JSONPlaceholder has only 100 posts
+  const rowHeight = 40;
 
   useEffect(() => {
-    indexedDB.deleteDatabase(DB_NAME);
-    openDB().then(() => {
-      const initialData = generateBatchData(0, 1000);
-      saveToDB(initialData).then(() => {
-        console.log("Initial data saved to IndexedDB");
-        setRecordCount(1000);
-        loadData(0, 1000);
-      });
-    });
+    loadInitialData();
+    const interval = setInterval(() => {
+      loadMoreData();
+    }, 5000);
+
+    return () => clearInterval(interval);
   }, []);
 
-  const loadData = async (start, count) => {
-    const rows = await fetchFromDB(start, count);
-    setData((prev) => [...prev, ...rows]);
-    if (rows.length < count) setHasMore(false);
+  const loadInitialData = async () => {
+    setLoading(true);
+    const newData = await fetchData(0, 30);
+    setData(newData);
+    setLoading(false);
   };
 
-  const addMoreData = async () => {
-    const newBatch = generateBatchData(recordCount, 100000);
-    await saveToDB(newBatch);
-    const newRecordCount = recordCount + 100000;
-    setRecordCount(newRecordCount);
-    loadData(recordCount, 100000);
+  const loadMoreData = async () => {
+    if (loading || data.length >= totalRecords) return;
+    setLoading(true);
+    const newData = await fetchData(data.length, 10);
+    setData((prevData) => [...prevData, ...newData]);
+    setLoading(false);
   };
 
-  const rowRenderer = ({ index, key, style }) => {
-    const row = data[index];
-    if (!row)
+  // Infinite scrolling trigger (5 rows left)
+  const handleScroll = ({ scrollHeight, scrollTop, clientHeight }) => {
+    const totalRows = data.length;
+    const lastVisibleRow = Math.floor((scrollTop + clientHeight) / rowHeight);
+
+    console.log(`Total: ${totalRows}, Last Visible: ${lastVisibleRow}`);
+
+    // If the last visible row is within 5 rows from the end, load more data
+    if (totalRows - lastVisibleRow <= 5) {
+      console.log("Fetching more data...");
+      loadMoreData();
+    }
+  };
+
+  // Handle sorting (skips index column)
+  const handleSort = (column) => {
+    if (column === "index") return; // Don't sort the index column
+
+    let direction = "asc";
+    if (sortColumn === column && sortDirection === "asc") {
+      direction = "desc";
+    }
+    setSortColumn(column);
+    setSortDirection(direction);
+
+    const sortedData = [...data].sort((a, b) => {
+      if (a[column] < b[column]) return direction === "asc" ? -1 : 1;
+      if (a[column] > b[column]) return direction === "asc" ? 1 : -1;
+      return 0;
+    });
+
+    setData(sortedData);
+  };
+
+  // Grid cell renderer
+  const cellRenderer = ({ columnIndex, key, rowIndex, style }) => {
+    if (rowIndex === 0) {
       return (
-        <div key={key} style={style}>
-          Loading...
+        <div
+          key={key}
+          style={{
+            ...style,
+            backgroundColor: "#007bff",
+            color: "white",
+            fontWeight: "bold",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: allColumns[columnIndex].isIndex ? "default" : "pointer",
+            borderBottom: "2px solid #ddd",
+          }}
+          onClick={() =>
+            allColumns[columnIndex].isIndex
+              ? null
+              : handleSort(allColumns[columnIndex].accessorKey)
+          }
+        >
+          {allColumns[columnIndex].header}{" "}
+          {!allColumns[columnIndex].isIndex &&
+          sortColumn === allColumns[columnIndex].accessorKey
+            ? sortDirection === "asc"
+              ? "▲"
+              : "▼"
+            : ""}
         </div>
       );
+    }
+
+    const row = data[rowIndex - 1];
+    const column = allColumns[columnIndex];
 
     return (
       <div
@@ -111,102 +126,44 @@ const TableComponent = () => {
         style={{
           ...style,
           display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
           borderBottom: "1px solid #ddd",
-          minWidth: `${COLUMN_COUNT * COLUMN_WIDTH}px`,
+          padding: "5px",
         }}
       >
-        {Object.values(row).map((value, i) => (
-          <div
-            key={i}
-            style={{
-              width: COLUMN_WIDTH,
-              padding: "5px",
-              overflow: "hidden",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {value}
-          </div>
-        ))}
+        {column.isIndex ? rowIndex : row?.[column.accessorKey] || "Loading..."}
       </div>
     );
   };
 
-  // Sync horizontal scrolling between header and table body
-  const syncScroll = () => {
-    if (scrollContainerRef.current && headerRef.current) {
-      headerRef.current.scrollLeft = scrollContainerRef.current.scrollLeft;
-    }
-  };
-
   return (
-    <div style={{ padding: "20px", width: "100vw", overflow: "hidden" }}>
-      <h3>Total Records: {recordCount.toLocaleString()}</h3>
-      <button
-        onClick={addMoreData}
-        disabled={!hasMore}
-        style={{
-          marginBottom: "10px",
-          padding: "10px",
-          cursor: hasMore ? "pointer" : "not-allowed",
-        }}
-      >
-        {hasMore ? "Add 10,000 More Rows" : "No More Data"}
-      </button>
+    <div style={{ padding: "20px", maxWidth: "1000px", margin: "auto" }}>
+      <h3>Total Records: {data.length.toLocaleString()}</h3>
 
-      {/* Fixed Header with Synced Horizontal Scroll */}
       <div
         style={{
-          height: "80vh",
-          width: "100vw",
+          height: "600px",
           border: "1px solid #ddd",
-          overflow: "hidden",
+          overflow: "scroll",
         }}
       >
-        <div ref={headerRef} style={{ width: "100%", overflowX: "auto" }}>
-          <div
-            style={{
-              display: "flex",
-              background: "#007bff",
-              color: "#fff",
-              padding: "10px",
-              fontWeight: "bold",
-              minWidth: `${COLUMN_COUNT * COLUMN_WIDTH}px`,
-            }}
-          >
-            {Array.from({ length: COLUMN_COUNT }).map((_, i) => (
-              <div key={i} style={{ width: COLUMN_WIDTH, padding: "5px" }}>
-                Column {i + 1}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Scrollable Table (Syncs with Header) */}
-        <div
-          ref={scrollContainerRef}
-          style={{
-            height: "calc(80vh - 40px)",
-            width: "100%",
-            overflow: "auto",
-          }}
-          onScroll={syncScroll}
-        >
-          <div style={{ minWidth: `${COLUMN_COUNT * COLUMN_WIDTH}px` }}>
-            <AutoSizer disableHeight>
-              {({ width }) => (
-                <List
-                  height={window.innerHeight * 0.8 - 40}
-                  rowCount={data.length}
-                  rowHeight={30}
-                  width={width}
-                  rowRenderer={rowRenderer}
-                  overscanRowCount={50}
-                />
-              )}
-            </AutoSizer>
-          </div>
-        </div>
+        <AutoSizer>
+          {({ height, width }) => (
+            <Grid
+              ref={gridRef}
+              cellRenderer={cellRenderer}
+              columnCount={allColumns.length}
+              columnWidth={({ index }) => allColumns[index].width}
+              height={height}
+              rowCount={data.length + 1} // +1 for header row
+              rowHeight={rowHeight}
+              width={width}
+              overscanRowCount={10}
+              onScroll={handleScroll}
+            />
+          )}
+        </AutoSizer>
       </div>
     </div>
   );
